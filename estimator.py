@@ -2,37 +2,7 @@ import numpy as np
 import torch
 from ops import *
 from kernels import *
-
-LlamaConfig = {
-  "_name_or_path": "meta-llama/Meta-Llama-3-8B",
-  "architectures": [
-    "LlamaForCausalLM"
-  ],
-  "batch_size": 8,
-  "attention_bias": False,
-  "attention_dropout": 0.0,
-  "bos_token_id": 128000,
-  "eos_token_id": 128001,
-  "hidden_act": "silu",
-  "hidden_size": 4096,
-  "initializer_range": 0.02,
-  "intermediate_size": 14336,
-  "max_position_embeddings": 8192,
-  "model_type": "llama",
-  "num_attention_heads": 32,
-  "head_dim": 128,
-  "num_hidden_layers": 32,
-  "num_key_value_heads": 8,
-  "pretraining_tp": 1,
-  "rms_norm_eps": 1e-05,
-  "rope_scaling": None,
-  "rope_theta": 500000.0,
-  "tie_word_embeddings": False,
-  "torch_dtype": "bfloat16",
-  "transformers_version": "4.36.2",
-  "use_cache": True,
-  "vocab_size": 128256
-}
+from config import *
 
 class Accelerator:
     def __init__(self) -> None:
@@ -44,16 +14,26 @@ class A100(Accelerator):
         self.SM = 108
         self.tensor_core = 4
         self.cuda_core = 64
+        self.peak_performance = 312e+12  # 312 TFLOPS for fp16 tensor core
         self.compute_clock = 1.410e+9
-        self.memory_clock = 1.512e+9
-    
+        self.memory_clock = 1.512e+9   # 1.283 Byte per clock ?
+        self.flop_clock_tc = 512  # 1 tc operate 256 FMA (512 FLOPs) per clock
+        self.flop_clock_sm = self.flop_clock_tc * self.tensor_core
+        self.flop_clock = self.flop_clock_sm * self.SM
+        self.max_register_per_sm = 256e+3 # 256 KB
+        self.max_register_total = self.max_register_per_sm * self.SM 
+        
+        # mma m16n8k16 fp16*fp16 -> 2(inst) * 8 (Cylcle) => 16 compute cycle
+        
+        # The A100 L2 read bandwidth is 5120 Bytes/clk
+        # The GPU is operating at a frequency of 1065 MHz, which can be boosted up to 1410 MHz, memory is running at 1512 MHz.
+        # From https://www.techpowerup.com/gpu-specs/a100-pcie-80-gb.c3821
+        # https://forums.developer.nvidia.com/t/how-to-calculate-the-tensor-core-fp16-performance-of-h100/244727
+
+
 
 if __name__ == "__main__":
-    _batch = 8
-    _input_len = 2048
-    _output_len = 2048
-    _dtype = torch.float16
-    _input = torch.empty(_batch, _input_len, dtype=_dtype)
-    llama_3_8b = Llama3_8B(LlamaConfig, _output_len)
+    _input = torch.empty(GLOBAL_CONFIG.batch_size, GLOBAL_CONFIG.input_seq_len, dtype=GLOBAL_CONFIG.act_dtype)
+    llama_3_8b = Llama3_8B()
     output, ops = llama_3_8b(_input)
     print(ops)
