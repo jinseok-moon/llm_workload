@@ -26,11 +26,13 @@ boost clock : 1410 MHz
 - 4 Third-generation Tensor Cores/SM, 432 Third-generation Tensor Cores per GPU
 - 5 HBM2 stacks, 10 512-bit Memory Controllers
 
-Each SM in the A100 GPU includes four of the new redesigned Tensor Cores and
-therefore each SM in A100 delivers 1024 FP16 FMA operations per clock (or 2048 individual
-FP16 floating point operations per clock).
-Comparing total GPU performance, not just SM-level performance, the NVIDIA A100 Tensor
-Core GPU with its 108 SMs includes a total of 432 Tensor Cores that deliver up to 312 TFLOPS
-of dense mixed-precision FP16/FP32 performance. That equates to 2.5x the mixed-precision
-Tensor Core performance of the entire Tesla V100 GPU, and 20x V100’s standard FP32 (FMA
-operations running on traditional FP32 CUDA cores) throughput.
+- GEMM tensor core operation 만 계산
+  - Load/Store 는 async copy 를 통해 computation 에 hiding 됨
+- layer norm, softmax, activation 은 CUDA core 활용
+
+## Reference
+- https://ieeexplore.ieee.org/stamp/stamp.jsp?arnumber=9893362
+
+
+## TODO
+- flash attention 구현하기
