@@ -35,4 +35,4 @@ class A100(Accelerator):
 if __name__ == "__main__":
     _input = torch.empty(GLOBAL_CONFIG.batch_size, GLOBAL_CONFIG.input_seq_len, dtype=GLOBAL_CONFIG.act_dtype)
     llama_3_8b = Llama3_8B()
-    output, ops = llama_3_8b(_input)
+    output = llama_3_8b(_input)

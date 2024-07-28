@@ -84,7 +84,7 @@ class Model:
         self.result["bound"] = bound
         self.result["performance"] = performance
         self.result["mem_bandwidth"] = max_bandwidth
-        return time, arith_intensity, performance, bound
+        return
 
     def __call__(self, *args, **kwds):
         return self.forward(*args, **kwds)
@@ -126,7 +126,7 @@ class SoftMax(Model):
             self.compute_performance(ops, mem, max_bandwidth=GLOBAL_CONFIG.device.l2_brandwith)
         else:
             self.compute_performance(ops, mem)
-        return output, ops, mem
+        return output
 
 
 class LayerNormalization(Model):
@@ -151,7 +151,7 @@ class LayerNormalization(Model):
         else:
             self.compute_performance(ops, mem)
         
-        return output, ops, mem
+        return output
 
 class ResidualAddition(Model):
     def __init__(self, name=None) -> None:
@@ -168,7 +168,7 @@ class ResidualAddition(Model):
             self.compute_performance(ops, mem, max_bandwidth=GLOBAL_CONFIG.device.l2_brandwith)
         else:
             self.compute_performance(ops, mem)
-        return output, ops, mem
+        return output
             
 class SiLU(Model):
     def __init__(self, name=None) -> None:
@@ -193,7 +193,7 @@ class SiLU(Model):
         else:
             self.compute_performance(ops, mem)
             
-        return output, ops, mem
+        return output
     
     
 class Decoder(Model):
@@ -219,24 +219,15 @@ class Decoder(Model):
         self.result["children"].append(self.mlp_residual)
         
     def forward(self, x, kv_cache, cache_start_pos):
-        _ops = 0
-        _mem = 0
         residual = x
-        y, ops, mem = self.attention_norm(x)
-        _ops += ops
-        y, ops, mem = self.gqa(y, kv_cache, cache_start_pos)
-        _ops += ops
-        y, ops, mem = self.attention_residual(residual, y)
-        _ops += ops
+        y = self.attention_norm(x)
+        y = self.gqa(y, kv_cache, cache_start_pos)
+        y = self.attention_residual(residual, y)
         residual = y
-        y, ops, mem = self.mlp_norm(y)
-        _ops += ops
-        y, ops, mem = self.mlp(y)
-        _ops += ops
-        y, ops, mem = self.mlp_residual(residual, y)
-        _ops += ops
-        
-        return y, _ops, _mem
+        y = self.mlp_norm(y)
+        y = self.mlp(y)
+        y = self.mlp_residual(residual, y)
+        return y
 
 class MLP(Model):
     def __init__(self, hidden_size, im_size, layer_idx, name=None) -> None:
@@ -254,21 +245,11 @@ class MLP(Model):
         self.result["children"].append(self.down_proj)
         
     def forward(self, x):
-        _ops = 0
-        _mem = 0
-        y_gate, ops, mem = self.gate_proj(x)
-        _ops += ops
-        _mem += mem
-        y_up, ops, mem = self.up_proj(x)
-        _ops += ops
-        _mem += mem
-        act_y_gate, ops, mem = self.act_fn(y_gate)
-        _ops += ops
-        _mem += mem
-        y_down, ops, mem = self.down_proj(act_y_gate * y_up)
-        _ops += ops
-        _mem += mem
-        return y_down, _ops, _mem
+        y_gate = self.gate_proj(x)
+        y_up = self.up_proj(x)
+        act_y_gate = self.act_fn(y_gate)
+        y_down = self.down_proj(act_y_gate * y_up)
+        return y_down
     
 class ATTENTION_GEMM(Model):
     def __init__(self, name=None) -> None:
@@ -309,7 +290,7 @@ class ATTENTION_GEMM(Model):
         else:
             self.compute_performance(ops, mem)
             
-        return output, ops, mem
+        return output
 
 class GEMM(Model):
     def __init__(self, in_features, out_features, name=None) -> None:
@@ -341,7 +322,7 @@ class GEMM(Model):
             self.compute_performance(ops, mem, max_bandwidth=GLOBAL_CONFIG.device.l2_brandwith)
         else:
             self.compute_performance(ops, mem)
-        return output, ops, mem
+        return output
     
     def calc_cycle(self):
         pass
@@ -377,17 +358,11 @@ class GroupQueryAttention(Model):
         _ops = 0
         _mem = 0
 
-        q_proj, ops, mem = self.q_proj(x)
-        _ops += ops
-        _mem += mem
+        q_proj = self.q_proj(x)
         
-        k_proj, ops, mem= self.k_proj(x)
-        _ops += ops
-        _mem += mem
+        k_proj= self.k_proj(x)
         
-        v_proj, ops, mem = self.v_proj(x)
-        _ops += ops
-        _mem += mem
+        v_proj = self.v_proj(x)
         
         bsz, q_len, _ = x.size()
         q_proj = q_proj.view(bsz, q_len, self.num_heads, self.head_dim).transpose(1, 2)
@@ -403,23 +378,17 @@ class GroupQueryAttention(Model):
         k_proj = k_proj[:,:,None,:,:].expand(bsz, self.num_key_value_heads, self.num_key_value_groups, _len, self.head_dim).reshape(bsz, self.num_heads, _len, self.head_dim)
         v_proj = v_proj[:,:,None,:,:].expand(bsz, self.num_key_value_heads, self.num_key_value_groups, _len, self.head_dim).reshape(bsz, self.num_heads, _len, self.head_dim)
         
-        qkt, ops, mem = self.qkt(q_proj, k_proj.transpose(2,3))
-        _ops += ops
-        _mem += mem
+        qkt = self.qkt(q_proj, k_proj.transpose(2,3))
 
-        qkt, ops, mem = self.softmax(qkt)
+        qkt = self.softmax(qkt)
         
-        qktv, ops, mem = self.qktv(qkt, v_proj)
-        _ops += ops
-        _mem += mem
+        qktv = self.qktv(qkt, v_proj)
         
         qktv = qktv.reshape(bsz, q_len, self.head_dim* self.num_heads)
         
-        o_proj, ops, mem = self.o_proj(qktv)
-        _ops += ops
-        _mem += mem
+        o_proj = self.o_proj(qktv)
         
-        return o_proj, _ops, _mem
+        return o_proj
     
     def calc_cycle(self):
         pass
@@ -460,9 +429,9 @@ class Llama3_8B(Model):
         while out_len < self.output_len:
             bsz, q_len = y.size()
             y = y[:,:,None].expand(bsz, q_len, self.config.vocab_size)
-            y, ops, mem = self.head(y)
+            y = self.head(y)
             for layer in self.layers:
-                y, ops, mem = layer(y, self.kv_cache, self.cache_start_pos)
+                y = layer(y, self.kv_cache, self.cache_start_pos)
             if prefill:
                 self.cache_start_pos += 1
                 out_len += 1
@@ -470,9 +439,9 @@ class Llama3_8B(Model):
                 self.cache_start_pos += 256
                 out_len += 256
                 
-            y, ops, mem = self.norm(y)  # Final layer norm
+            y = self.norm(y)  # Final layer norm
             
-            y, ops, mem = self.tail(y)
+            y = self.tail(y)
             y = y[:,-1,:1]  # token output
             result.append(y)
             self.calc_result()
@@ -488,7 +457,7 @@ class Llama3_8B(Model):
         print(f"Latency: {Latency} s")
         Throughput = self.output_len/Latency
         print(f"Throughput: {Throughput} token/s")
-        return result, total_ops
+        return result
     
     def calc_prefill(self):
         pass
