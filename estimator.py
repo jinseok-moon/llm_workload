@@ -34,5 +34,13 @@ class A100(Accelerator):
 
 if __name__ == "__main__":
     _input = torch.empty(GLOBAL_CONFIG.batch_size, GLOBAL_CONFIG.input_seq_len, dtype=GLOBAL_CONFIG.act_dtype)
-    llama_3_8b = Llama3_8B()
-    output = llama_3_8b(_input)
+    
+    print("Naive Self Attention")
+    llama_3_8b = Llama3_8B(use_flash_attention=False)
+    output = llama_3_8b(_input, output_len=GLOBAL_CONFIG.output_seq_len)
+    
+    print("Flash Attention")
+    llama_3_8b = Llama3_8B(use_flash_attention=True)
+    output = llama_3_8b(_input, output_len=GLOBAL_CONFIG.output_seq_len)
+    
+    

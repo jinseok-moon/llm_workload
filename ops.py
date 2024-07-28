@@ -3,6 +3,7 @@ from kernels import *
 from config import *
 from collections import defaultdict
 import numpy as np
+import math
 class Model:
     def __init__(self, name=None) -> None:
         self.name = name
@@ -197,14 +198,14 @@ class SiLU(Model):
     
     
 class Decoder(Model):
-    def __init__(self, layer_idx, name=None) -> None:
+    def __init__(self, layer_idx, use_flash_attention=False, name=None) -> None:
         super().__init__(name)
         self.attention_norm = LayerNormalization(name=f"attention_norm")
         self.gqa = GroupQueryAttention(hidden_size=GLOBAL_CONFIG.hidden_size, 
                                        num_attention_heads=GLOBAL_CONFIG.num_attention_heads,
                                        num_key_value_heads=GLOBAL_CONFIG.num_key_value_heads, 
                                        head_dim=GLOBAL_CONFIG.head_dim,
-                                       layer_idx=layer_idx, name=f"gqa")
+                                       layer_idx=layer_idx, use_flash_attention=use_flash_attention, name=f"gqa")
         self.attention_residual = ResidualAddition(name=f"attention_residual")
 
         self.mlp_norm = LayerNormalization(name=f"mlp_norm")
@@ -251,6 +252,42 @@ class MLP(Model):
         y_down = self.down_proj(act_y_gate * y_up)
         return y_down
     
+class FLASH_ATTENTION_V2(Model):
+    """
+        qkt : (batch, num_head, seq_len, head_size) x {(batch, num_head, accumulated_seq_len, head_size).transpose(2,3)} -> (batch, num_head, seq_len, accumulated_seq_len)
+        qktv : (batch, num_head, seq_len, accumulated_seq_len) x (batch, num_head, accumulated_seq_len, head_size) -> (batch, num_head, seq_len, head_size)
+        output : (batch, num_head, seq_len, head_size)
+    """
+    def __init__(self, name=None) -> None:
+        super().__init__(name)
+        
+    def forward(self, q: torch.Tensor, k: torch.Tensor, v: torch.Tensor):    
+        batch_size, num_head, seq_len, head_size = q.shape
+        _B, _H, accumulated_seq_len, _N = k.shape
+        output = torch.empty([batch_size, num_head, seq_len, head_size], dtype=GLOBAL_CONFIG.act_dtype)
+        Br = head_size  # 128
+        Tr = math.ceil(seq_len / Br) # N / Br
+        
+        _mem_load_q = q.numel() * q.element_size()
+        _mem_load_k = k.numel() * k.element_size() * Tr  # Flash Attention v2 forward pass, Load Kj Vj x Tr times
+        _mem_load_v = v.numel() * v.element_size() * Tr
+         
+        _mem_store_output = output.numel() * output.element_size()  # Does not have to save L, for inference
+
+        qkt_matmul_ops = 2 * batch_size * seq_len * accumulated_seq_len * num_head * head_size
+        softmax_ops = batch_size * num_head * seq_len * accumulated_seq_len * 5
+        qktv_matmul_ops = 2 * batch_size * num_head * seq_len * accumulated_seq_len * head_size
+        
+        ops = qkt_matmul_ops + qktv_matmul_ops + softmax_ops
+        mem = _mem_load_q + _mem_load_k + _mem_load_v + _mem_store_output
+        
+        # if _mem_load_weight <= GLOBAL_CONFIG.device.l2_size and _mem_load_activation <= GLOBAL_CONFIG.device.l2_size and _mem_store_output <= GLOBAL_CONFIG.device.l2_size:
+            # self.compute_performance(ops, mem, max_bandwidth=GLOBAL_CONFIG.device.l2_brandwith)
+        # else:
+        self.compute_performance(ops, mem)
+            
+        return output
+    
 class ATTENTION_GEMM(Model):
     def __init__(self, name=None) -> None:
         super().__init__(name)
@@ -278,11 +315,11 @@ class ATTENTION_GEMM(Model):
         else:
             output = torch.empty([S, B, M, N], dtype=GLOBAL_CONFIG.act_dtype)
             
-        _mem_load_weight = K*N*weight.element_size()
-        _mem_load_activation = B*M*K*input.element_size()
-        _mem_store_output = B*M*N*input.element_size()
+        _mem_load_activation = input.numel() * input.element_size()
+        _mem_load_weight = weight.numel() * weight.element_size()
+        _mem_store_output = output.numel() * output.element_size()
 
-        ops = 2*M*N*K*B  # mac
+        ops = 2*M*N*K*B*S  # mac
         mem = _mem_load_weight + _mem_load_activation + _mem_store_output
         
         if _mem_load_weight <= GLOBAL_CONFIG.device.l2_size and _mem_load_activation <= GLOBAL_CONFIG.device.l2_size and _mem_store_output <= GLOBAL_CONFIG.device.l2_size:
@@ -328,40 +365,43 @@ class GEMM(Model):
         pass
 
 class GroupQueryAttention(Model):
-    def __init__(self, hidden_size, num_attention_heads, num_key_value_heads, head_dim, layer_idx, name=None):
+    def __init__(self, hidden_size, num_attention_heads, num_key_value_heads, head_dim, layer_idx, use_flash_attention=False, name=None):
         super().__init__(name)
         self.hidden_size = hidden_size
         self.layer_idx = layer_idx
         self.num_heads = num_attention_heads
         self.head_dim = head_dim
+        self.use_flash_attention = use_flash_attention
         self.num_key_value_heads = num_key_value_heads
         self.num_key_value_groups = self.num_heads // self.num_key_value_heads
 
+        # self.qkv_proj = GEMM(hidden_size, head_dim * (num_attention_heads+2*num_key_value_heads), name=f"{name}.qkv_proj")
+        
         self.q_proj = GEMM(hidden_size, head_dim * num_attention_heads, name=f"{name}.q_proj")
         self.k_proj = GEMM(hidden_size, head_dim * num_key_value_heads, name=f"{name}.k_proj")
         self.v_proj = GEMM(hidden_size, head_dim * num_key_value_heads, name=f"{name}.v_proj")
+        
         self.o_proj = GEMM(hidden_size, head_dim * num_attention_heads, name=f"{name}.o_proj")
         
         self.qkt = ATTENTION_GEMM(name=f"{name}.qkt_matmul")
         self.qktv = ATTENTION_GEMM(name=f"{name}.qkt_v_matmul")
         self.softmax = SoftMax(name=f"{name}.softmax")
+        self.flash_attention = FLASH_ATTENTION_V2(name=f"{name}.flash_attention")
         
         self.result["children"].append(self.q_proj)
         self.result["children"].append(self.k_proj)
         self.result["children"].append(self.v_proj)
-        self.result["children"].append(self.qkt)
-        self.result["children"].append(self.qktv)
-        self.result["children"].append(self.softmax)
+        if self.use_flash_attention:
+            self.result["children"].append(self.flash_attention)
+        else:
+            self.result["children"].append(self.qkt)
+            self.result["children"].append(self.softmax)
+            self.result["children"].append(self.qktv)
         self.result["children"].append(self.o_proj)
     
     def forward(self, x, kv_cache: KVCache, cache_start_pos):
-        _ops = 0
-        _mem = 0
-
         q_proj = self.q_proj(x)
-        
         k_proj= self.k_proj(x)
-        
         v_proj = self.v_proj(x)
         
         bsz, q_len, _ = x.size()
@@ -378,14 +418,15 @@ class GroupQueryAttention(Model):
         k_proj = k_proj[:,:,None,:,:].expand(bsz, self.num_key_value_heads, self.num_key_value_groups, _len, self.head_dim).reshape(bsz, self.num_heads, _len, self.head_dim)
         v_proj = v_proj[:,:,None,:,:].expand(bsz, self.num_key_value_heads, self.num_key_value_groups, _len, self.head_dim).reshape(bsz, self.num_heads, _len, self.head_dim)
         
-        qkt = self.qkt(q_proj, k_proj.transpose(2,3))
+        
+        if self.use_flash_attention:
+            qktv = self.flash_attention(q_proj, k_proj, v_proj)
+        else:
+            qkt = self.qkt(q_proj, k_proj.transpose(2,3))
+            qkt = self.softmax(qkt)
+            qktv = self.qktv(qkt, v_proj)
 
-        qkt = self.softmax(qkt)
-        
-        qktv = self.qktv(qkt, v_proj)
-        
         qktv = qktv.reshape(bsz, q_len, self.head_dim* self.num_heads)
-        
         o_proj = self.o_proj(qktv)
         
         return o_proj
@@ -395,29 +436,29 @@ class GroupQueryAttention(Model):
     
     
 class Llama3_8B(Model):
-    def __init__(self) -> None:
+    def __init__(self, use_flash_attention=False) -> None:
         super().__init__()
         config = GLOBAL_CONFIG
 
-        self.kv_cache = KVCache(config.batch_size, config.num_hidden_layers, config.hidden_size, config.num_key_value_heads, config.head_dim)
+        self.kv_cache = KVCache(config.batch_size, config.num_hidden_layers, config.output_seq_len, config.num_key_value_heads, config.head_dim)
         self.cache_start_pos = 0
         self.config = config
         self.layers = []
-        self.output_len = config.output_seq_len
 
         self.head = GEMM(config.vocab_size, config.hidden_size, name="head")
         self.tail = GEMM(config.hidden_size, config.vocab_size, name="tail")
         self.norm = LayerNormalization()
         n_layers = config.num_hidden_layers
         for i in range(n_layers):
-            self.layers.append(Decoder(i, name=f"decoder.layer.{i}"))
+            self.layers.append(Decoder(i, use_flash_attention=use_flash_attention, name=f"decoder.layer.{i}"))
             
         self.result["children"].append(self.head)
         self.result["children"].append(self.layers)
         self.result["children"].append(self.norm)
         self.result["children"].append(self.tail)
     
-    def forward(self, x):
+    def forward(self, x, output_len=None):
+        self.output_len = output_len
         y = x
         out_len = 0
         total_ops = 0
@@ -452,7 +493,6 @@ class Llama3_8B(Model):
                 TPOT.append(self.result["inference_time"])
         print(f"TTFT: {TTFT*1e+3} ms")
         print(f"TPOT: {np.mean(TPOT)*1e+3} ms")
-        print(TPOT)
         Latency = TTFT+np.mean(TPOT)*self.output_len
         print(f"Latency: {Latency} s")
         Throughput = self.output_len/Latency

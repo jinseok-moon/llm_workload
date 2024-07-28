@@ -36,6 +36,7 @@ class LlamaConfig(Config):
     hidden_size = 4096
     im_size = 14336
     vocab_size = 128256
+    use_flash_attention = True
         
 
 GLOBAL_CONFIG = LlamaConfig()
