@@ -2,6 +2,7 @@
 
 ## Condition
 - Llama3-8B Model (based on Huggingface)
+
 - Input token 2048
 - Output token 2048
 - Batch size 8
@@ -17,6 +18,15 @@
 - GEMM tensor core operation 만 계산
   - Load/Store 는 async copy 를 통해 computation 에 hiding 됨
 - layer norm, softmax, activation 은 CUDA core 활용
+
+## About Model Layer
+- Decoder Layer
+![Model Decoder layer](llama_decoder.png)
+
+- KV Cache with Group Query Attention
+![kvcache](kvcache_and_gqa.png)
+
+
 
 ## Environment
 You need to install `PyTorch` because of `torch.Tensor` usages.
