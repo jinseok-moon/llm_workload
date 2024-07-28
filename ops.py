@@ -4,6 +4,7 @@ from config import *
 from collections import defaultdict
 import numpy as np
 import math
+import copy
 class Model:
     def __init__(self, name=None) -> None:
         self.name = name
@@ -85,6 +86,7 @@ class Model:
         self.result["bound"] = bound
         self.result["performance"] = performance
         self.result["mem_bandwidth"] = max_bandwidth
+        self.result["max_perf"] = max_perf
         return
 
     def __call__(self, *args, **kwds):
@@ -123,10 +125,10 @@ class SoftMax(Model):
         _mem_load = B * H * QS * KTS * x.element_size()
         _mem_store = B * H * QS * KTS * x.element_size()
         mem = _mem_load + _mem_store
-        if _mem_load <= GLOBAL_CONFIG.device.l2_size and _mem_store <= GLOBAL_CONFIG.device.l2_size:
-            self.compute_performance(ops, mem, max_bandwidth=GLOBAL_CONFIG.device.l2_brandwith)
-        else:
-            self.compute_performance(ops, mem)
+        # if _mem_load <= GLOBAL_CONFIG.device.l2_size and _mem_store <= GLOBAL_CONFIG.device.l2_size:
+            # self.compute_performance(ops, mem, max_bandwidth=GLOBAL_CONFIG.device.l2_brandwith)
+        # else:
+        self.compute_performance(ops, mem)
         return output
 
 
@@ -147,10 +149,10 @@ class LayerNormalization(Model):
         _mem_load = x.numel() * x.element_size()
         _mem_store = x.numel() * x.element_size()
         mem = _mem_load + _mem_store
-        if _mem_load <= GLOBAL_CONFIG.device.l2_size and _mem_store <= GLOBAL_CONFIG.device.l2_size:
-            self.compute_performance(ops, mem, max_bandwidth=GLOBAL_CONFIG.device.l2_brandwith)
-        else:
-            self.compute_performance(ops, mem)
+        # if _mem_load <= GLOBAL_CONFIG.device.l2_size and _mem_store <= GLOBAL_CONFIG.device.l2_size:
+        #     self.compute_performance(ops, mem, max_bandwidth=GLOBAL_CONFIG.device.l2_brandwith)
+        # else:
+        self.compute_performance(ops, mem)
         
         return output
 
@@ -165,10 +167,10 @@ class ResidualAddition(Model):
         ops = x.numel()
         _mem_load_or_store = x.numel() * x.element_size()
         mem = _mem_load_or_store*3
-        if _mem_load_or_store <= GLOBAL_CONFIG.device.l2_size:
-            self.compute_performance(ops, mem, max_bandwidth=GLOBAL_CONFIG.device.l2_brandwith)
-        else:
-            self.compute_performance(ops, mem)
+        # if _mem_load_or_store <= GLOBAL_CONFIG.device.l2_size:
+        #     self.compute_performance(ops, mem, max_bandwidth=GLOBAL_CONFIG.device.l2_brandwith)
+        # else:
+        self.compute_performance(ops, mem)
         return output
             
 class SiLU(Model):
@@ -189,10 +191,10 @@ class SiLU(Model):
         _mem_store = x.numel() * x.element_size()
         mem = _mem_load + _mem_store
         
-        if _mem_load <= GLOBAL_CONFIG.device.l2_size and _mem_store <= GLOBAL_CONFIG.device.l2_size:
-            self.compute_performance(ops, mem, max_bandwidth=GLOBAL_CONFIG.device.l2_brandwith)
-        else:
-            self.compute_performance(ops, mem)
+        # if _mem_load <= GLOBAL_CONFIG.device.l2_size and _mem_store <= GLOBAL_CONFIG.device.l2_size:
+        #     self.compute_performance(ops, mem, max_bandwidth=GLOBAL_CONFIG.device.l2_brandwith)
+        # else:
+        self.compute_performance(ops, mem)
             
         return output
     
@@ -238,7 +240,7 @@ class MLP(Model):
         self.gate_proj = GEMM(self.hidden_size, self.im_size, name=f"{name}.gate")
         self.up_proj = GEMM(self.hidden_size, self.im_size, name=f"{name}.up")
         self.down_proj = GEMM(self.im_size, self.hidden_size, name=f"{name}.down")
-        self.act_fn = SiLU()
+        self.act_fn = SiLU(name=f"{name}.silu")
         
         self.result["children"].append(self.gate_proj)
         self.result["children"].append(self.up_proj)
@@ -322,10 +324,10 @@ class ATTENTION_GEMM(Model):
         ops = 2*M*N*K*B*S  # mac
         mem = _mem_load_weight + _mem_load_activation + _mem_store_output
         
-        if _mem_load_weight <= GLOBAL_CONFIG.device.l2_size and _mem_load_activation <= GLOBAL_CONFIG.device.l2_size and _mem_store_output <= GLOBAL_CONFIG.device.l2_size:
-            self.compute_performance(ops, mem, max_bandwidth=GLOBAL_CONFIG.device.l2_brandwith)
-        else:
-            self.compute_performance(ops, mem)
+        # if _mem_load_weight <= GLOBAL_CONFIG.device.l2_size and _mem_load_activation <= GLOBAL_CONFIG.device.l2_size and _mem_store_output <= GLOBAL_CONFIG.device.l2_size:
+        #     self.compute_performance(ops, mem, max_bandwidth=GLOBAL_CONFIG.device.l2_brandwith)
+        # else:
+        self.compute_performance(ops, mem)
             
         return output
 
@@ -355,10 +357,10 @@ class GEMM(Model):
 
         ops = 2*M*N*K*B  # mac
         mem = _mem_load_weight + _mem_load_activation + _mem_store_output
-        if _mem_load_weight <= GLOBAL_CONFIG.device.l2_size and _mem_load_activation <= GLOBAL_CONFIG.device.l2_size and _mem_store_output <= GLOBAL_CONFIG.device.l2_size:
-            self.compute_performance(ops, mem, max_bandwidth=GLOBAL_CONFIG.device.l2_brandwith)
-        else:
-            self.compute_performance(ops, mem)
+        # if _mem_load_weight <= GLOBAL_CONFIG.device.l2_size and _mem_load_activation <= GLOBAL_CONFIG.device.l2_size and _mem_store_output <= GLOBAL_CONFIG.device.l2_size:
+        #     self.compute_performance(ops, mem, max_bandwidth=GLOBAL_CONFIG.device.l2_brandwith)
+        # else:
+        self.compute_performance(ops, mem)
         return output
     
     def calc_cycle(self):
@@ -388,6 +390,7 @@ class GroupQueryAttention(Model):
         self.softmax = SoftMax(name=f"{name}.softmax")
         self.flash_attention = FLASH_ATTENTION_V2(name=f"{name}.flash_attention")
         
+        # self.result["children"].append(self.qkv_proj)
         self.result["children"].append(self.q_proj)
         self.result["children"].append(self.k_proj)
         self.result["children"].append(self.v_proj)
@@ -400,6 +403,13 @@ class GroupQueryAttention(Model):
         self.result["children"].append(self.o_proj)
     
     def forward(self, x, kv_cache: KVCache, cache_start_pos):
+        # _proj = self.qkv_proj(x)
+        # q_size = self.head_dim * self.num_heads
+        # k_size = self.head_dim * self.num_key_value_heads
+        # q_proj = _proj[:,:,:q_size]
+        # k_proj = _proj[:,:,q_size:q_size+k_size]
+        # v_proj = _proj[:,:,q_size+k_size:]
+        
         q_proj = self.q_proj(x)
         k_proj= self.k_proj(x)
         v_proj = self.v_proj(x)
@@ -436,8 +446,8 @@ class GroupQueryAttention(Model):
     
     
 class Llama3_8B(Model):
-    def __init__(self, use_flash_attention=False) -> None:
-        super().__init__()
+    def __init__(self, use_flash_attention=False, name=None) -> None:
+        super().__init__(name)
         config = GLOBAL_CONFIG
 
         self.kv_cache = KVCache(config.batch_size, config.num_hidden_layers, config.output_seq_len, config.num_key_value_heads, config.head_dim)
@@ -447,7 +457,7 @@ class Llama3_8B(Model):
 
         self.head = GEMM(config.vocab_size, config.hidden_size, name="head")
         self.tail = GEMM(config.hidden_size, config.vocab_size, name="tail")
-        self.norm = LayerNormalization()
+        self.norm = LayerNormalization(name="final_norm")
         n_layers = config.num_hidden_layers
         for i in range(n_layers):
             self.layers.append(Decoder(i, use_flash_attention=use_flash_attention, name=f"decoder.layer.{i}"))
@@ -461,12 +471,14 @@ class Llama3_8B(Model):
         self.output_len = output_len
         y = x
         out_len = 0
-        total_ops = 0
         result = []
         prefill = True
         TTFT = 0
         TPOT = []
-        TPS = 0
+        
+        prefill_performance = None
+        decoder_performance = None
+        
         while out_len < self.output_len:
             bsz, q_len = y.size()
             y = y[:,:,None].expand(bsz, q_len, self.config.vocab_size)
@@ -479,7 +491,7 @@ class Llama3_8B(Model):
             else:
                 self.cache_start_pos += 256
                 out_len += 256
-                
+            
             y = self.norm(y)  # Final layer norm
             
             y = self.tail(y)
@@ -488,17 +500,21 @@ class Llama3_8B(Model):
             self.calc_result()
             if prefill:
                 TTFT = self.result["inference_time"]
+                prefill_performance = copy.deepcopy(self.result)
                 prefill = False
             else:
                 TPOT.append(self.result["inference_time"])
+                if decoder_performance is None:
+                   decoder_performance = self.result
+
         print(f"TTFT: {TTFT*1e+3} ms")
         print(f"TPOT: {np.mean(TPOT)*1e+3} ms")
-        Latency = TTFT+np.mean(TPOT)*self.output_len
+        Latency = TTFT+np.mean(TPOT)*self.output_len  # Larger KV cache, more computation
         print(f"Latency: {Latency} s")
         Throughput = self.output_len/Latency
         print(f"Throughput: {Throughput} token/s")
-        return result
+        
+        return result, prefill_performance, decoder_performance
     
     def calc_prefill(self):
         pass
-        

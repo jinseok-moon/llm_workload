@@ -3,7 +3,7 @@ import torch
 from ops import *
 from kernels import *
 from config import *
-
+import json
 class Accelerator:
     def __init__(self) -> None:
         pass
@@ -30,17 +30,38 @@ class A100(Accelerator):
         # From https://www.techpowerup.com/gpu-specs/a100-pcie-80-gb.c3821
         # https://forums.developer.nvidia.com/t/how-to-calculate-the-tensor-core-fp16-performance-of-h100/244727
 
-
+def get_result(data: dict):
+    result = data
+    childs = data["children"]
+    result["children"] = {}
+    
+    if childs:
+        for child in childs:
+            if not isinstance(child, dict):  # Model
+                if isinstance(child, list):
+                    result["children"][child[0].name] = get_result(child[0].result)
+                else:
+                    result["children"][child.name] = get_result(child.result)
+            else:
+                result["children"][child["name"]] = get_result(child)
+    return result
 
 if __name__ == "__main__":
     _input = torch.empty(GLOBAL_CONFIG.batch_size, GLOBAL_CONFIG.input_seq_len, dtype=GLOBAL_CONFIG.act_dtype)
     
-    print("Naive Self Attention")
-    llama_3_8b = Llama3_8B(use_flash_attention=False)
-    output = llama_3_8b(_input, output_len=GLOBAL_CONFIG.output_seq_len)
+    # print("---Naive Self Attention---")
+    # llama_3_8b = Llama3_8B(use_flash_attention=False)
+    # output, prefill, decode = llama_3_8b(_input, output_len=GLOBAL_CONFIG.output_seq_len)
     
-    print("Flash Attention")
-    llama_3_8b = Llama3_8B(use_flash_attention=True)
-    output = llama_3_8b(_input, output_len=GLOBAL_CONFIG.output_seq_len)
+    print("\n---Flash Attention---")
+    llama_3_8b = Llama3_8B(use_flash_attention=True, name="Llama3_8B")
+    output, prefill, decode = llama_3_8b(_input, output_len=GLOBAL_CONFIG.output_seq_len)
+    
+    prefill_json = get_result(prefill)
+    decode_json = get_result(decode)
     
     
+    with open("prefill.json", "w") as outfile: 
+        json.dump(prefill_json, outfile)
+    with open("decode.json", "w") as outfile: 
+        json.dump(decode_json, outfile)
