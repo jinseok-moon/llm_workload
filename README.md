@@ -2,7 +2,6 @@
 
 ## Condition
 - Llama3-8B Model (based on Huggingface)
-
 - Input token 2048
 - Output token 2048
 - Batch size 8
@@ -15,18 +14,13 @@
 - 64 FP32 CUDA Cores/SM, 6912 FP32 CUDA Cores per GPU
 - 4 Third-generation Tensor Cores/SM, 432 Third-generation Tensor Cores per GPU
 - 5 HBM2 stacks, 10 512-bit Memory Controllers
-- GEMM tensor core operation 만 계산
-  - Load/Store 는 async copy 를 통해 computation 에 hiding 됨
-- layer norm, softmax, activation 은 CUDA core 활용
 
 ## About Model Layer
 - Decoder Layer
-![Model Decoder layer](llama_decoder.png)
+![Model Decoder layer](images/llama_decoder.png)
 
 - KV Cache with Group Query Attention
-![kvcache](kvcache_and_gqa.png)
-
-
+![kvcache](images/kvcache_and_gqa.png)
 
 ## Environment
 You need to install `PyTorch` because of `torch.Tensor` usages.
@@ -65,11 +59,28 @@ Latency: 21.617371532919357 s
 Throughput: 94.73862244913843 token/s
 ```
 
-## For more accurate estimation
-- DRAM to L2 or L1 bandwidth
-- compute/memory cycle calculation
-- async copy with tiling
-- L2 persistent cache
+## Tensor Core MMA (Matrix Multiplication and Accumulate) operation
+- Each third-gen tensor core can perform 256 FP16 FMA per clock.
+  - in PTX level, `mma.sync.m16n8k16` shape is supported
+  - mma operation is converted to SASS (Hardware instructions of NVIDIA GPU) form, 2 HMMA instructions.
+  - for perform 1 HMMA inst, it is estimated about 8 cycles.
+  - for example, (batch, seq_len, hidden_dim) x (batch, hidden_dim, out_dim) GEMM case,
+    - #HMMA: batch * seq_len * hidden_dim * out_dim / (16 * 8 * 16) 
+    - #HMMA_PER_GPU: HMMA / TC_PER_SM / SM_PER_GPU  (4 tc per sm and 108 sm per gpu)
+    - #HMMA_CYCLE: HMMA_PER_GPU * 8
+    - estimated infer time: HMMA_CYCLE / GPU_CLOCK
+- With asynchronous copy, computation can be overlapped with memory I/O
+  - async copy, in PTX level, `cp.async` and `LDGSTS` in SASS.
+  - with async copy, memory can be loaded to shared memory directly dram-(l2 bypass)-smem
+  ![async](images/async_copy.png)
+
+- When the kernel is memory-bound, this pipeline would not be performed well
+  ![pipeline](images/pipeline.png)
+
+## Buffer Caching
+![l2persist](images/l2_persist.png)
+- `L2 persistent cache` allows kernel to load data from l2 cache, not DRAM.
+- L2 bandwidth is about 3.8TB/s and dram bandwidth is 1.94 TB/s
 
 
 ## Reference

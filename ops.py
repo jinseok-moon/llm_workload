@@ -5,12 +5,15 @@ from collections import defaultdict
 import numpy as np
 import math
 import copy
+
 class Model:
     def __init__(self, name=None) -> None:
         self.name = name
         self.result = dict({
             "name": self.name,
             "inference_time": 0,
+            "calc_by_cycle": 0,
+            "infer_time_by_cycle": 0,
             "ops": 0,
             "mem": 0,
             "arith_intensity": 0,
@@ -31,6 +34,7 @@ class Model:
         infer_time = 0
         ops = 0 
         mem = 0
+        infer_time_cycle = 0
         if self.result["children"]:
             for child in self.result["children"]:
                 if isinstance(child, list):
@@ -39,15 +43,18 @@ class Model:
                         ops += c.result["ops"]
                         mem += c.result["mem"]
                         infer_time += c.result["inference_time"]
+                        infer_time_cycle += c.result["infer_time_by_cycle"]
                 else:
                     child.calc_result()
                     ops += child.result["ops"]
                     mem += child.result["mem"]
                     infer_time += child.result["inference_time"]
+                    infer_time_cycle += child.result["infer_time_by_cycle"]
+                    
             self.result["ops"] = ops
             self.result["mem"] = mem
             self.result["inference_time"] = infer_time
-        
+            self.result["infer_time_by_cycle"] = infer_time_cycle
                     
     def calc_cycle(self):
         for layer in self.layers:
@@ -128,6 +135,7 @@ class SoftMax(Model):
         # if _mem_load <= GLOBAL_CONFIG.device.l2_size and _mem_store <= GLOBAL_CONFIG.device.l2_size:
             # self.compute_performance(ops, mem, max_bandwidth=GLOBAL_CONFIG.device.l2_brandwith)
         # else:
+        
         self.compute_performance(ops, mem)
         return output
 
@@ -286,8 +294,16 @@ class FLASH_ATTENTION_V2(Model):
         # if _mem_load_weight <= GLOBAL_CONFIG.device.l2_size and _mem_load_activation <= GLOBAL_CONFIG.device.l2_size and _mem_store_output <= GLOBAL_CONFIG.device.l2_size:
             # self.compute_performance(ops, mem, max_bandwidth=GLOBAL_CONFIG.device.l2_brandwith)
         # else:
+        qk_tc = batch_size*num_head*seq_len*head_size*accumulated_seq_len / (16*8*16)
+        sv_tc = batch_size*num_head*seq_len*accumulated_seq_len*head_size / (16*8*16)
+        tc = qk_tc + sv_tc
+        _tc_total = tc/4/108  # TOTAL Instruction at parallel
+        compute_clock = 1.410e+9
+        _time = _tc_total*8 / compute_clock
+        self.result["infer_time_by_cycle"] = _time
         self.compute_performance(ops, mem)
-            
+        if self.result["bound"] == "memory":
+            self.result["infer_time_by_cycle"] = self.result["inference_time"]
         return output
     
 class ATTENTION_GEMM(Model):
@@ -327,8 +343,14 @@ class ATTENTION_GEMM(Model):
         # if _mem_load_weight <= GLOBAL_CONFIG.device.l2_size and _mem_load_activation <= GLOBAL_CONFIG.device.l2_size and _mem_store_output <= GLOBAL_CONFIG.device.l2_size:
         #     self.compute_performance(ops, mem, max_bandwidth=GLOBAL_CONFIG.device.l2_brandwith)
         # else:
+        tc = S*M*N*K*B / (16*8*16)
+        _tc_total = tc/4/108  # TOTAL Instruction at parallel
+        compute_clock = 1.410e+9
+        _time = _tc_total*8 / compute_clock
+        self.result["infer_time_by_cycle"] = _time
         self.compute_performance(ops, mem)
-            
+        if self.result["bound"] == "memory":
+            self.result["infer_time_by_cycle"] = self.result["inference_time"]
         return output
 
 class GEMM(Model):
@@ -360,7 +382,15 @@ class GEMM(Model):
         # if _mem_load_weight <= GLOBAL_CONFIG.device.l2_size and _mem_load_activation <= GLOBAL_CONFIG.device.l2_size and _mem_store_output <= GLOBAL_CONFIG.device.l2_size:
         #     self.compute_performance(ops, mem, max_bandwidth=GLOBAL_CONFIG.device.l2_brandwith)
         # else:
+        
+        tc = S*M*N*K*B / (16*8*16)
+        _tc_total = tc/4/108  # TOTAL Instruction at parallel
+        compute_clock = 1.410e+9
+        _time = _tc_total*8 / compute_clock
+        self.result["infer_time_by_cycle"] = _time
         self.compute_performance(ops, mem)
+        if self.result["bound"] == "memory":
+            self.result["infer_time_by_cycle"] = self.result["inference_time"]
         return output
     
     def calc_cycle(self):
@@ -476,6 +506,8 @@ class Llama3_8B(Model):
         TTFT = 0
         TPOT = []
         
+        TTFT_CYCLE = 0
+        TPOT_CYCLE = []
         prefill_performance = None
         decoder_performance = None
         
@@ -500,10 +532,15 @@ class Llama3_8B(Model):
             self.calc_result()
             if prefill:
                 TTFT = self.result["inference_time"]
+                TTFT_CYCLE = self.result["infer_time_by_cycle"]
                 prefill_performance = copy.deepcopy(self.result)
                 prefill = False
             else:
                 TPOT.append(self.result["inference_time"])
+                if self.result["bound"]  == "compute":
+                    TPOT_CYCLE.append(self.result["infer_time_by_cycle"])
+                else:
+                    TPOT_CYCLE.append(self.result["inference_time"])
                 if decoder_performance is None:
                    decoder_performance = self.result
 
@@ -513,6 +550,14 @@ class Llama3_8B(Model):
         print(f"Latency: {Latency} s")
         Throughput = self.output_len/Latency
         print(f"Throughput: {Throughput} token/s")
+        
+        # print("Calculated by estimated GEMM cycle")
+        # print(f"TTFT: {TTFT_CYCLE*1e+3} ms")
+        # print(f"TPOT: {np.mean(TPOT_CYCLE)*1e+3} ms")
+        # Latency = TTFT_CYCLE+np.mean(TPOT_CYCLE)*self.output_len  # Larger KV cache, more computation
+        # print(f"Latency: {Latency} s")
+        # Throughput = self.output_len/Latency
+        # print(f"Throughput: {Throughput} token/s")
         
         return result, prefill_performance, decoder_performance
     
