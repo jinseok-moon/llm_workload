@@ -300,10 +300,12 @@ class FLASH_ATTENTION_V2(Model):
         _tc_total = tc/4/108  # TOTAL Instruction at parallel
         compute_clock = 1.410e+9
         _time = _tc_total*8 / compute_clock
-        self.result["infer_time_by_cycle"] = _time
+        mem_time = mem / self.max_bandwidth  # memory IO time
+        self.result["infer_time_by_cycle"] = max(_time, mem_time)
+        
         self.compute_performance(ops, mem)
-        if self.result["bound"] == "memory":
-            self.result["infer_time_by_cycle"] = self.result["inference_time"]
+        # if self.result["bound"] == "memory":
+            # self.result["infer_time_by_cycle"] = self.result["inference_time"]
         return output
     
 class ATTENTION_GEMM(Model):
@@ -347,10 +349,11 @@ class ATTENTION_GEMM(Model):
         _tc_total = tc/4/108  # TOTAL Instruction at parallel
         compute_clock = 1.410e+9
         _time = _tc_total*8 / compute_clock
-        self.result["infer_time_by_cycle"] = _time
+        mem_time = mem / self.max_bandwidth  # memory IO time
+        self.result["infer_time_by_cycle"] = max(_time, mem_time)
         self.compute_performance(ops, mem)
-        if self.result["bound"] == "memory":
-            self.result["infer_time_by_cycle"] = self.result["inference_time"]
+        # if self.result["bound"] == "memory":
+            # self.result["infer_time_by_cycle"] = self.result["inference_time"]
         return output
 
 class GEMM(Model):
@@ -382,15 +385,17 @@ class GEMM(Model):
         # if _mem_load_weight <= GLOBAL_CONFIG.device.l2_size and _mem_load_activation <= GLOBAL_CONFIG.device.l2_size and _mem_store_output <= GLOBAL_CONFIG.device.l2_size:
         #     self.compute_performance(ops, mem, max_bandwidth=GLOBAL_CONFIG.device.l2_brandwith)
         # else:
+        # mem_per_clock = self.max_bandwidth / GLOBAL_CONFIG.device.memory_clock
         
+        mem_time = mem / self.max_bandwidth  # memory IO time
         tc = S*M*N*K*B / (16*8*16)
         _tc_total = tc/4/108  # TOTAL Instruction at parallel
         compute_clock = 1.410e+9
         _time = _tc_total*8 / compute_clock
-        self.result["infer_time_by_cycle"] = _time
+        self.result["infer_time_by_cycle"] = max(_time, mem_time)
         self.compute_performance(ops, mem)
-        if self.result["bound"] == "memory":
-            self.result["infer_time_by_cycle"] = self.result["inference_time"]
+        # if self.result["bound"] == "memory":
+            # self.result["infer_time_by_cycle"] = self.result["inference_time"]
         return output
     
     def calc_cycle(self):
@@ -537,10 +542,10 @@ class Llama3_8B(Model):
                 prefill = False
             else:
                 TPOT.append(self.result["inference_time"])
-                if self.result["bound"]  == "compute":
-                    TPOT_CYCLE.append(self.result["infer_time_by_cycle"])
-                else:
-                    TPOT_CYCLE.append(self.result["inference_time"])
+                # if self.result["bound"]  == "compute":
+                TPOT_CYCLE.append(self.result["infer_time_by_cycle"])
+                # else:
+                    # TPOT_CYCLE.append(self.result["inference_time"])
                 if decoder_performance is None:
                    decoder_performance = self.result
 
@@ -551,13 +556,13 @@ class Llama3_8B(Model):
         Throughput = self.output_len/Latency
         print(f"Throughput: {Throughput} token/s")
         
-        # print("Calculated by estimated GEMM cycle")
-        # print(f"TTFT: {TTFT_CYCLE*1e+3} ms")
-        # print(f"TPOT: {np.mean(TPOT_CYCLE)*1e+3} ms")
-        # Latency = TTFT_CYCLE+np.mean(TPOT_CYCLE)*self.output_len  # Larger KV cache, more computation
-        # print(f"Latency: {Latency} s")
-        # Throughput = self.output_len/Latency
-        # print(f"Throughput: {Throughput} token/s")
+        print("Calculated by estimated GEMM cycle")
+        print(f"TTFT: {TTFT_CYCLE*1e+3} ms")
+        print(f"TPOT: {np.mean(TPOT_CYCLE)*1e+3} ms")
+        Latency = TTFT_CYCLE+np.mean(TPOT_CYCLE)*self.output_len  # Larger KV cache, more computation
+        print(f"Latency: {Latency} s")
+        Throughput = self.output_len/Latency
+        print(f"Throughput: {Throughput} token/s")
         
         return result, prefill_performance, decoder_performance
     
