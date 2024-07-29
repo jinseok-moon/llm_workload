@@ -63,7 +63,7 @@ Throughput: 94.73862244913843 token/s
 - Each third-gen tensor core can perform 256 FP16 FMA per clock.
   - in PTX level, `mma.sync.m16n8k16` shape is supported
   - mma operation is converted to SASS (Hardware instructions of NVIDIA GPU) form, 2 HMMA instructions.
-  - for perform 1 HMMA inst, it is estimated about 8 cycles.
+  - for performing 1 HMMA inst, it is estimated about 8 cycles.
   - for example, (batch, seq_len, hidden_dim) x (batch, hidden_dim, out_dim) GEMM case,
     - #HMMA: batch * seq_len * hidden_dim * out_dim / (16 * 8 * 16) 
     - #HMMA_PER_GPU: HMMA / TC_PER_SM / SM_PER_GPU  (4 tc per sm and 108 sm per gpu)
@@ -79,11 +79,12 @@ Throughput: 94.73862244913843 token/s
 
 ## Buffer Caching
 ![l2persist](images/l2_persist.png)
-- `L2 persistent cache` allows kernel to load data from l2 cache, not DRAM.
+- `L2 persistent cache` allows kernel to load/store data at l2 cache, not DRAM.
 - L2 bandwidth is about 3.8TB/s and dram bandwidth is 1.94 TB/s
 
 
 ## Reference
+- [CUTLASS](https://github.com/NVIDIA/cutlass)
 - [Future Scaling of Memory Hierarchy for Tensor Cores and Eliminating Redundant Shared Memory Traffic Using Inter-Warp Multicasting](https://ieeexplore.ieee.org/stamp/stamp.jsp?arnumber=9893362)
 - [Flash Attention v2](https://arxiv.org/abs/2307.08691)
 - [NVIDIA A100 Tensor Core GPU Architecture](https://images.nvidia.com/aem-dam/en-zz/Solutions/data-center/nvidia-ampere-architecture-whitepaper.pdf)
