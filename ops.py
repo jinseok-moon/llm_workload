@@ -480,7 +480,7 @@ class Llama3_8B(Model):
         super().__init__(name)
         config = GLOBAL_CONFIG
 
-        self.kv_cache = KVCache(config.batch_size, config.num_hidden_layers, config.output_seq_len, config.num_key_value_heads, config.head_dim)
+        self.kv_cache = KVCache(config.batch_size, config.num_hidden_layers, config.output_seq_len+config.input_seq_len, config.num_key_value_heads, config.head_dim)
         self.cache_start_pos = 0
         self.config = config
         self.layers = []
@@ -518,7 +518,7 @@ class Llama3_8B(Model):
             for layer in self.layers:
                 y = layer(y, self.kv_cache, self.cache_start_pos)
             if prefill:
-                self.cache_start_pos += 1
+                self.cache_start_pos += q_len
                 out_len += 1
             else:
                 self.cache_start_pos += 256
@@ -546,6 +546,7 @@ class Llama3_8B(Model):
 
         print(f"TTFT: {TTFT*1e+3} ms")
         print(f"TPOT: {np.mean(TPOT)*1e+3} ms")
+        print(f"TPOT tendency {TPOT}")
         Latency = TTFT+np.mean(TPOT)*self.output_len  # Larger KV cache, more computation
         print(f"Latency: {Latency} s")
         Throughput = self.output_len/Latency
